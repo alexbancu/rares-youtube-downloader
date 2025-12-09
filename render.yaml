@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: youtube-audio-downloader
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    region: oregon
+    plan: starter
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
