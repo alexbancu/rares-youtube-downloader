@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 
 interface VideoFormat {
   format_id: string;
@@ -19,25 +19,30 @@ interface VideoInfo {
   formats: VideoFormat[];
 }
 
+type DownloadState = 'idle' | 'fetching' | 'ready' | 'downloading' | 'complete' | 'error';
+
 const AUDIO_FORMATS = [
-  { value: 'mp3', label: 'MP3', desc: 'Universal compatibility' },
-  { value: 'aac', label: 'AAC', desc: 'Good quality, small size' },
-  { value: 'm4a', label: 'M4A', desc: 'Apple format, good quality' },
-  { value: 'opus', label: 'Opus', desc: 'Best quality/size ratio' },
-  { value: 'flac', label: 'FLAC', desc: 'Lossless audio' },
-  { value: 'wav', label: 'WAV', desc: 'Uncompressed audio' },
-  { value: 'vorbis', label: 'Vorbis (OGG)', desc: 'Open format' },
-  { value: 'alac', label: 'ALAC', desc: 'Apple lossless' },
+  { value: 'mp3', label: 'MP3', desc: 'Universal compatibility', icon: '🎵' },
+  { value: 'aac', label: 'AAC', desc: 'Great quality, small size', icon: '🔊' },
+  { value: 'm4a', label: 'M4A', desc: 'Apple devices', icon: '🍎' },
+  { value: 'opus', label: 'Opus', desc: 'Best compression', icon: '⚡' },
+  { value: 'flac', label: 'FLAC', desc: 'Lossless quality', icon: '💎' },
+  { value: 'wav', label: 'WAV', desc: 'Uncompressed', icon: '📀' },
 ];
 
 export default function Home() {
   const [url, setUrl] = useState('');
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [downloading, setDownloading] = useState(false);
+  const [state, setState] = useState<DownloadState>('idle');
   const [error, setError] = useState('');
   const [selectedFormat, setSelectedFormat] = useState('mp3');
-  const [showFormatDropdown, setShowFormatDropdown] = useState(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const resetState = () => {
+    setState('idle');
+    setVideoInfo(null);
+    setError('');
+  };
 
   const fetchVideoInfo = async () => {
     if (!url.trim()) {
@@ -45,7 +50,7 @@ export default function Home() {
       return;
     }
 
-    setLoading(true);
+    setState('fetching');
     setError('');
     setVideoInfo(null);
 
@@ -63,22 +68,25 @@ export default function Home() {
       }
 
       setVideoInfo(data);
+      setState('ready');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
-    } finally {
-      setLoading(false);
+      setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
+      setState('error');
     }
   };
 
   const handleDownload = async (original: boolean, format?: string) => {
-    setDownloading(true);
+    setState('downloading');
     setError('');
+
+    abortControllerRef.current = new AbortController();
 
     try {
       const response = await fetch('/api/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url, original, format }),
+        signal: abortControllerRef.current.signal,
       });
 
       if (!response.ok) {
@@ -86,7 +94,6 @@ export default function Home() {
         throw new Error(errorData.error || 'Download failed');
       }
 
-      // Get filename from Content-Disposition header
       const contentDisposition = response.headers.get('Content-Disposition');
       let filename = 'audio-file';
       if (contentDisposition) {
@@ -96,7 +103,6 @@ export default function Home() {
         }
       }
 
-      // Create blob and download
       const blob = await response.blob();
       const downloadUrl = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -106,217 +112,332 @@ export default function Home() {
       a.click();
       window.URL.revokeObjectURL(downloadUrl);
       document.body.removeChild(a);
+
+      setState('complete');
+      setTimeout(() => setState('ready'), 3000);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Download failed');
-    } finally {
-      setDownloading(false);
+      if (err instanceof Error && err.name === 'AbortError') {
+        setState('ready');
+        return;
+      }
+      setError(err instanceof Error ? err.message : 'Download failed. Please try again.');
+      setState('error');
+    }
+  };
+
+  const cancelDownload = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
     }
   };
 
   const formatDuration = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
+    const hrs = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
     const secs = seconds % 60;
+    if (hrs > 0) {
+      return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
+  const isValidYouTubeUrl = (url: string) => {
+    return /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+/.test(url);
+  };
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 py-12 px-4">
-      <div className="max-w-2xl mx-auto">
-        <div className="text-center mb-10">
-          <h1 className="text-4xl font-bold text-white mb-2">
-            YouTube Audio Downloader
-          </h1>
-          <p className="text-gray-400">
-            Download audio from YouTube with preserved quality and metadata
+    <div className="min-h-screen bg-[#0a0a0a] text-white">
+      {/* Header */}
+      <header className="border-b border-white/5">
+        <div className="max-w-4xl mx-auto px-6 py-5 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-red-500 to-red-600 flex items-center justify-center">
+              <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/>
+              </svg>
+            </div>
+            <div>
+              <h1 className="font-semibold text-lg">Audio Extractor</h1>
+              <p className="text-xs text-white/40">YouTube to Audio</p>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-4xl mx-auto px-6 py-12">
+        {/* Hero Section */}
+        <div className="text-center mb-12">
+          <h2 className="text-4xl md:text-5xl font-bold mb-4 bg-gradient-to-r from-white to-white/60 bg-clip-text text-transparent">
+            Extract Audio from YouTube
+          </h2>
+          <p className="text-white/50 text-lg max-w-xl mx-auto">
+            Download high-quality audio with preserved metadata and artwork. No conversion losses.
           </p>
         </div>
 
-        <div className="bg-gray-800/50 backdrop-blur-lg rounded-2xl p-6 shadow-2xl border border-gray-700">
-          {/* URL Input */}
-          <div className="flex gap-3 mb-6">
-            <input
-              type="text"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="Paste YouTube URL here..."
-              className="flex-1 px-4 py-3 bg-gray-900/50 border border-gray-600 rounded-xl text-white placeholder-gray-400 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all"
-              onKeyDown={(e) => e.key === 'Enter' && fetchVideoInfo()}
-            />
-            <button
-              onClick={fetchVideoInfo}
-              disabled={loading}
-              className="px-6 py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 text-white font-medium rounded-xl transition-all duration-200 flex items-center gap-2"
-            >
-              {loading ? (
-                <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+        {/* Main Card */}
+        <div className="bg-white/[0.02] border border-white/[0.05] rounded-2xl overflow-hidden">
+          {/* URL Input Section */}
+          <div className="p-6 md:p-8">
+            <label className="block text-sm font-medium text-white/60 mb-3">
+              YouTube URL
+            </label>
+            <div className="flex gap-3">
+              <div className="flex-1 relative">
+                <input
+                  type="text"
+                  value={url}
+                  onChange={(e) => {
+                    setUrl(e.target.value);
+                    if (state === 'error') setError('');
+                  }}
+                  placeholder="https://youtube.com/watch?v=..."
+                  className="w-full px-4 py-3.5 bg-white/[0.03] border border-white/[0.08] rounded-xl text-white placeholder-white/30 focus:outline-none focus:border-white/20 focus:bg-white/[0.05] transition-all text-base"
+                  onKeyDown={(e) => e.key === 'Enter' && state !== 'fetching' && fetchVideoInfo()}
+                  disabled={state === 'fetching' || state === 'downloading'}
+                />
+                {url && isValidYouTubeUrl(url) && state === 'idle' && (
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                    <svg className="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={state === 'ready' || state === 'complete' ? resetState : fetchVideoInfo}
+                disabled={state === 'fetching' || state === 'downloading'}
+                className="px-6 py-3.5 bg-white text-black font-medium rounded-xl hover:bg-white/90 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2 min-w-[120px] justify-center"
+              >
+                {state === 'fetching' ? (
+                  <>
+                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    <span>Loading</span>
+                  </>
+                ) : state === 'ready' || state === 'complete' ? (
+                  'New URL'
+                ) : (
+                  'Extract'
+                )}
+              </button>
+            </div>
+
+            {/* Error Message */}
+            {error && (
+              <div className="mt-4 p-4 bg-red-500/10 border border-red-500/20 rounded-xl flex items-start gap-3">
+                <svg className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
-              ) : (
-                'Fetch'
-              )}
-            </button>
+                <div>
+                  <p className="text-red-400 text-sm font-medium">Error</p>
+                  <p className="text-red-400/70 text-sm mt-0.5">{error}</p>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Error Display */}
-          {error && (
-            <div className="mb-6 p-4 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400">
-              {error}
+          {/* Loading Skeleton */}
+          {state === 'fetching' && (
+            <div className="border-t border-white/[0.05] p-6 md:p-8">
+              <div className="flex gap-5 animate-pulse">
+                <div className="w-40 h-24 bg-white/[0.05] rounded-lg flex-shrink-0" />
+                <div className="flex-1 space-y-3">
+                  <div className="h-5 bg-white/[0.05] rounded w-3/4" />
+                  <div className="h-4 bg-white/[0.05] rounded w-1/2" />
+                  <div className="h-4 bg-white/[0.05] rounded w-1/4" />
+                </div>
+              </div>
             </div>
           )}
 
           {/* Video Info */}
-          {videoInfo && (
-            <div className="space-y-6">
-              {/* Video Preview */}
-              <div className="flex gap-4 p-4 bg-gray-900/50 rounded-xl">
-                <img
-                  src={videoInfo.thumbnail}
-                  alt={videoInfo.title}
-                  className="w-32 h-24 object-cover rounded-lg"
-                />
-                <div className="flex-1 min-w-0">
-                  <h2 className="text-white font-semibold truncate mb-1">
-                    {videoInfo.title}
-                  </h2>
-                  <p className="text-gray-400 text-sm mb-1">{videoInfo.uploader}</p>
-                  <p className="text-gray-500 text-sm">
-                    Duration: {formatDuration(videoInfo.duration)}
-                  </p>
-                </div>
-              </div>
-
-              {/* Available Source Formats */}
-              {videoInfo.formats.length > 0 && (
-                <div className="p-4 bg-gray-900/30 rounded-xl">
-                  <h3 className="text-gray-300 text-sm font-medium mb-2">Available Source Formats:</h3>
-                  <div className="flex flex-wrap gap-2">
-                    {videoInfo.formats.map((f) => (
-                      <span
-                        key={f.format_id}
-                        className="px-2 py-1 bg-gray-700/50 rounded text-xs text-gray-300"
-                      >
-                        {f.ext.toUpperCase()} - {f.acodec} {f.abr ? `(${f.abr}kbps)` : ''}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Download Buttons */}
-              <div className="space-y-4">
-                {/* Original Format Button */}
-                <button
-                  onClick={() => handleDownload(true)}
-                  disabled={downloading}
-                  className="w-full px-6 py-4 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 disabled:from-gray-600 disabled:to-gray-600 text-white font-medium rounded-xl transition-all duration-200 flex items-center justify-center gap-3"
-                >
-                  {downloading ? (
-                    <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                    </svg>
-                  ) : (
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                    </svg>
-                  )}
-                  <span>Download Original Audio</span>
-                  <span className="text-green-200 text-sm">(Best Quality - No Conversion)</span>
-                </button>
-
-                {/* Format Selection Dropdown */}
-                <div className="relative">
-                  <button
-                    onClick={() => setShowFormatDropdown(!showFormatDropdown)}
-                    disabled={downloading}
-                    className="w-full px-6 py-4 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 disabled:from-gray-600 disabled:to-gray-600 text-white font-medium rounded-xl transition-all duration-200 flex items-center justify-between"
-                  >
-                    <div className="flex items-center gap-3">
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
-                      </svg>
-                      <span>Convert to {selectedFormat.toUpperCase()}</span>
+          {videoInfo && (state === 'ready' || state === 'downloading' || state === 'complete') && (
+            <>
+              <div className="border-t border-white/[0.05] p-6 md:p-8">
+                <div className="flex gap-5">
+                  <div className="relative flex-shrink-0">
+                    <img
+                      src={videoInfo.thumbnail}
+                      alt={videoInfo.title}
+                      className="w-40 h-24 object-cover rounded-lg"
+                    />
+                    <div className="absolute bottom-2 right-2 px-1.5 py-0.5 bg-black/80 rounded text-xs font-medium">
+                      {formatDuration(videoInfo.duration)}
                     </div>
-                    <svg className={`w-5 h-5 transition-transform ${showFormatDropdown ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    </svg>
-                  </button>
-
-                  {/* Dropdown Menu */}
-                  {showFormatDropdown && (
-                    <div className="absolute top-full left-0 right-0 mt-2 bg-gray-800 border border-gray-700 rounded-xl shadow-xl z-10 overflow-hidden">
-                      <div className="p-2">
-                        {AUDIO_FORMATS.map((format) => (
-                          <button
-                            key={format.value}
-                            onClick={() => {
-                              setSelectedFormat(format.value);
-                              setShowFormatDropdown(false);
-                            }}
-                            className={`w-full px-4 py-3 text-left rounded-lg transition-colors flex items-center justify-between ${
-                              selectedFormat === format.value
-                                ? 'bg-purple-600/20 text-purple-300'
-                                : 'text-gray-300 hover:bg-gray-700/50'
-                            }`}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h3 className="font-semibold text-white line-clamp-2 mb-1">
+                      {videoInfo.title}
+                    </h3>
+                    <p className="text-white/50 text-sm">{videoInfo.uploader}</p>
+                    {videoInfo.formats.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mt-3">
+                        {videoInfo.formats.slice(0, 4).map((f) => (
+                          <span
+                            key={f.format_id}
+                            className="px-2 py-0.5 bg-white/[0.05] rounded text-xs text-white/50"
                           >
-                            <div>
-                              <span className="font-medium">{format.label}</span>
-                              <span className="text-gray-500 text-sm ml-2">- {format.desc}</span>
-                            </div>
-                            {selectedFormat === format.value && (
-                              <svg className="w-5 h-5 text-purple-400" fill="currentColor" viewBox="0 0 20 20">
-                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                              </svg>
-                            )}
-                          </button>
+                            {f.acodec} {f.abr ? `${f.abr}k` : ''}
+                          </span>
                         ))}
                       </div>
-                      <div className="p-3 border-t border-gray-700">
-                        <button
-                          onClick={() => {
-                            handleDownload(false, selectedFormat);
-                            setShowFormatDropdown(false);
-                          }}
-                          disabled={downloading}
-                          className="w-full px-4 py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
-                        >
-                          {downloading ? (
-                            <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
-                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                            </svg>
-                          ) : (
-                            <>
-                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                              </svg>
-                              Download as {selectedFormat.toUpperCase()}
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               </div>
 
-              {/* Info Note */}
-              <div className="p-4 bg-blue-500/10 border border-blue-500/30 rounded-xl">
-                <p className="text-blue-300 text-sm">
-                  <span className="font-medium">Note:</span> Original audio preserves the exact quality as uploaded to YouTube (typically Opus or AAC).
-                  Converting to other formats may reduce quality. Metadata and thumbnail are embedded in all downloads.
-                </p>
+              {/* Download Options */}
+              <div className="border-t border-white/[0.05] p-6 md:p-8 space-y-6">
+                {/* Original Quality Download */}
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <h4 className="font-medium text-white">Original Quality</h4>
+                      <p className="text-sm text-white/40">Best audio quality, no conversion</p>
+                    </div>
+                    <span className="px-2 py-1 bg-green-500/10 text-green-400 text-xs font-medium rounded-full">
+                      Recommended
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => handleDownload(true)}
+                    disabled={state === 'downloading'}
+                    className="w-full py-4 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 disabled:from-white/10 disabled:to-white/10 text-white font-medium rounded-xl transition-all flex items-center justify-center gap-3"
+                  >
+                    {state === 'downloading' ? (
+                      <>
+                        <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                        <span>Downloading...</span>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); cancelDownload(); }}
+                          className="ml-2 px-3 py-1 bg-white/20 hover:bg-white/30 rounded-lg text-sm transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : state === 'complete' ? (
+                      <>
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                        <span>Downloaded!</span>
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                        <span>Download Original</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Divider */}
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-white/[0.05]"></div>
+                  </div>
+                  <div className="relative flex justify-center">
+                    <span className="px-4 bg-[#0a0a0a] text-white/30 text-sm">or convert to</span>
+                  </div>
+                </div>
+
+                {/* Format Selection */}
+                <div>
+                  <h4 className="font-medium text-white mb-3">Convert Format</h4>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mb-4">
+                    {AUDIO_FORMATS.map((format) => (
+                      <button
+                        key={format.value}
+                        onClick={() => setSelectedFormat(format.value)}
+                        disabled={state === 'downloading'}
+                        className={`p-3 rounded-xl border transition-all text-left ${
+                          selectedFormat === format.value
+                            ? 'border-white/20 bg-white/[0.05]'
+                            : 'border-white/[0.05] hover:border-white/10 hover:bg-white/[0.02]'
+                        } disabled:opacity-50`}
+                      >
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-sm">{format.icon}</span>
+                          <span className="font-medium text-sm">{format.label}</span>
+                        </div>
+                        <p className="text-xs text-white/40">{format.desc}</p>
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    onClick={() => handleDownload(false, selectedFormat)}
+                    disabled={state === 'downloading'}
+                    className="w-full py-4 bg-white/[0.05] hover:bg-white/[0.08] border border-white/[0.08] disabled:opacity-50 text-white font-medium rounded-xl transition-all flex items-center justify-center gap-3"
+                  >
+                    {state === 'downloading' ? (
+                      <>
+                        <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                        <span>Converting...</span>
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                        </svg>
+                        <span>Convert to {selectedFormat.toUpperCase()}</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
-            </div>
+            </>
           )}
         </div>
 
-        {/* Footer */}
-        <div className="text-center mt-8 text-gray-500 text-sm">
-          <p>Requires yt-dlp and ffmpeg installed on the server</p>
+        {/* Features */}
+        <div className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="p-5 bg-white/[0.02] border border-white/[0.05] rounded-xl">
+            <div className="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center mb-3">
+              <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+              </svg>
+            </div>
+            <h3 className="font-medium mb-1">High Quality</h3>
+            <p className="text-sm text-white/40">Original audio quality preserved with no re-encoding</p>
+          </div>
+          <div className="p-5 bg-white/[0.02] border border-white/[0.05] rounded-xl">
+            <div className="w-10 h-10 rounded-lg bg-purple-500/10 flex items-center justify-center mb-3">
+              <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+              </svg>
+            </div>
+            <h3 className="font-medium mb-1">Full Metadata</h3>
+            <p className="text-sm text-white/40">Title, artist, and thumbnail embedded automatically</p>
+          </div>
+          <div className="p-5 bg-white/[0.02] border border-white/[0.05] rounded-xl">
+            <div className="w-10 h-10 rounded-lg bg-green-500/10 flex items-center justify-center mb-3">
+              <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+            </div>
+            <h3 className="font-medium mb-1">Secure & Private</h3>
+            <p className="text-sm text-white/40">Files processed server-side and deleted after download</p>
+          </div>
         </div>
-      </div>
+      </main>
+
+      {/* Footer */}
+      <footer className="border-t border-white/[0.05] mt-auto">
+        <div className="max-w-4xl mx-auto px-6 py-6 text-center text-white/30 text-sm">
+          For personal use only. Respect copyright and content creators.
+        </div>
+      </footer>
     </div>
   );
 }
